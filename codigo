@@ -1,0 +1,517 @@
+#include <stdio.h>
+#include <string.h>
+#include <time.h>
+
+/* Melissa Felix, Gabrielly Figueiredo e Pedro de Brito
+
+/* ─── Cores: verde -> sucesso; vermelho-> erro; amarelo -> avisos / perguntas; ciano -> títulos e cabeçalhos; negrito -> reforçar texto sem mudar a cor;
+reset -> usado pra voltar a cor padrão. */
+#define COR_RESET "\033[0m"
+#define COR_VERMELHO "\033[1;31m"
+#define COR_VERDE "\033[1;32m"
+#define COR_AMARELO "\033[1;33m"
+#define COR_CIANO "\033[1;36m"
+#define COR_NEGRITO "\033[1m"
+ 
+/* ─── Constantes ─────────────────────────────────────────── */
+#define MAX_CONTAS 10
+#define TAM_NOME 50
+#define TAM_SENHA 20
+#define TAM_DATA 20
+#define MAX_HISTORICO 5 /* quantas transacoes guardamos por conta */
+#define TAM_HIST 120
+#define MAX_TENTATIVAS 3 /* tentativas de senha antes de bloquear */
+#define TEMPO_BLOQUEIO 30 /* tempo de bloqueio, em segundos */
+ 
+/* ─── Estrutura de dados ──────────────────────────────────── */
+/* vetores para guardar os dados de cada conta */
+int num_conta[MAX_CONTAS];
+char nome[MAX_CONTAS][TAM_NOME];
+char senha[MAX_CONTAS][TAM_SENHA];
+float saldo[MAX_CONTAS];
+int total_contas = 0;
+ 
+/*  Historico de transacoes Guarda as ultimas MAX_HISTORICO movimentacoes de cada conta,sempre com data/hora, da mais antiga para a mais recente.*/
+char historico[MAX_CONTAS][MAX_HISTORICO][TAM_HIST];
+int qtd_historico[MAX_CONTAS];
+ 
+/*  sistema de tentativa de logins (quantas tentativas pode fazer e o tempo de bloqueio) */
+int tentativas_login[MAX_CONTAS];
+time_t bloqueio_login[MAX_CONTAS];
+ 
+/*  Sistema de login só permite 1 conta logada por vez (qnd ta -1 é pq n tem conta nenhuma logada no momento) */
+int conta_logada = -1;
+ 
+/* ─── Funções Principais ──────────────────────────────────────────── */
+int menu();
+void criar_conta();
+void fazer_login();
+void fazer_logout();
+void depositar();
+void sacar();
+void transferir();
+void consultar_saldo();
+void extrato();
+/* Funções auxiliares */
+int buscar_conta(int numero); 
+void obter_horario(char *destino); 
+void registrar_historico(int idx, const char *descricao);
+int confirmar_operacao(const char *mensagem); 
+ 
+
+/* MENU */
+
+int menu() {
+    int opcao;
+    
+    printf("\n");
+    printf("┌────────────────────────────────────────────────────────────────────┐\n");
+    printf("│                                                                    │\n");
+    printf("│                                                                    │\n");
+    
+    
+    printf("│                           🔴   🟩 🟩                               │\n");
+    printf("│                           🟩   🟩                                  │\n");
+    printf("│                           🟩   🟩 🟩                               │\n");
+    printf("│                           🟩   🟩                                  │\n");
+    
+    printf("│                                                                    │\n");
+    printf("│                      SISTEMA BANCÁRIO DO IF                        │\n");
+    printf("│                                                                    │\n");
+    
+    printf("├────────────────────────────────────────────────────────────────────┤\n");
+    printf("│                                                                    │\n");
+    
+
+    printf("│   🔴 [1] Criar Conta             🔴 [5] Transferir                 │\n");
+    printf("│                                                                    │\n");
+    printf("│   🔴 [2] Fazer Login             🔴 [6] Consultar Saldo            │\n");
+    printf("│                                                                    │\n");
+    printf("│   🔴 [3] Depositar               🔴 [7] Extrato                    │\n");
+    printf("│                                                                    │\n");
+    printf("│   🔴 [4] Sacar                   🔴 [8] Fazer Logout               │\n");
+    
+    printf("│                                                                    │\n");
+    printf("├────────────────────────────────────────────────────────────────────┤\n");
+    printf("│                                                                    │\n");
+    printf("│                      🔴 [0] Encerrar Sistema                       │\n");
+    printf("│                                                                    │\n");
+    printf("├────────────────────────────────────────────────────────────────────┤\n");
+    printf("│                                                                    │\n");
+    
+    // status da conta logada //
+    if (conta_logada != -1) {
+        printf("│   " COR_VERDE "Conta atual: %s (conta %d)" COR_RESET "                          │\n",
+               nome[conta_logada], num_conta[conta_logada]);
+    } else {
+        printf("│   " COR_AMARELO "Nenhuma conta logada no momento." COR_RESET "                    │\n");
+    }
+    
+    printf("│                                                                    │\n");
+    printf("│   Selecione uma opcao: ");
+    scanf("%d", &opcao);
+    
+    printf("                                           │\n");
+    printf("└────────────────────────────────────────────────────────────────────┘\n");
+    
+    return opcao;
+}
+ 
+/* ------ */
+/* FUNCAO AUXILIAR - busca o indice de uma conta pelo numero */
+/* ------- */
+int buscar_conta(int numero) {
+    int i;
+    for (i = 0; i < total_contas; i++) {
+        if (num_conta[i] == numero) {
+            return i;
+        }
+    }
+    return -1; /* nao encontrada */
+}
+ 
+/* ------- */
+/* FUNCAO AUXILIAR - usa <time.h> para escrever a data/hora dentro de "destino" */
+/* ------ */
+void obter_horario(char *destino) {
+    time_t agora = time(NULL);
+    struct tm *info = localtime(&agora);
+    strftime(destino, TAM_DATA, "%d/%m/%Y %H:%M", info);
+}
+ 
+/* ------- */
+/* FUNCAO AUXILIAR - adiciona uma linha no historico da conta Guarda as últimas 5 movimentações da conta, sempre descartando a mais velha quando chega no máximo.*/
+/* ------ */
+void registrar_historico(int idx, const char *descricao) {
+    char horario[TAM_DATA];
+    char linha[TAM_HIST];
+    int i;
+    
+    obter_horario(horario);
+    snprintf(linha, TAM_HIST, "%s - %s", horario, descricao);
+    
+    if (qtd_historico[idx] < MAX_HISTORICO) {
+        strcpy(historico[idx][qtd_historico[idx]], linha);
+        qtd_historico[idx]++;
+    } else {
+        for (i = 0; i < MAX_HISTORICO - 1; i++) {
+            strcpy(historico[idx][i], historico[idx][i + 1]);
+        }
+        strcpy(historico[idx][MAX_HISTORICO - 1], linha);
+    }
+}
+ 
+/* ------ */
+/* FUNCAO AUXILIAR - pede confirmacao (s/n) antes de executar */
+/* ------ */
+int confirmar_operacao(const char *mensagem) {
+    char resposta;
+    printf(COR_AMARELO "%s (s/n): " COR_RESET, mensagem);
+    scanf(" %c", &resposta);
+    return (resposta == 's' || resposta == 'S');
+}
+ 
+/* ------ */
+/* 1. CRIAR CONTA */
+/* ------ */
+void criar_conta() {
+    printf("\n" COR_CIANO "--- CRIAR CONTA ---" COR_RESET "\n");
+    
+    if (total_contas >= MAX_CONTAS) {
+        printf(COR_VERMELHO "Limite de contas atingido (%d contas)." COR_RESET "\n", MAX_CONTAS);
+        return;
+    }
+    
+    /* numero da conta é gerado automaticamente aq */
+    num_conta[total_contas] = total_contas + 1;
+    saldo[total_contas] = 0.0;
+    qtd_historico[total_contas] = 0;
+    tentativas_login[total_contas] = 0;
+    bloqueio_login[total_contas] = 0;
+    
+    printf("Nome do titular: ");
+    scanf(" %[^\n]", nome[total_contas]); /* lê os nomes com espacos */
+    
+    printf("Defina uma senha: ");
+    scanf(" %s", senha[total_contas]); /* senha sem espacos */
+    
+    total_contas++;
+    
+    printf("\n" COR_VERDE "Conta criada com sucesso!" COR_RESET "\n");
+    printf("Numero da conta: %d\n", num_conta[total_contas - 1]);
+    printf("Titular : %s\n", nome[total_contas - 1]);
+    printf("Saldo inicial : R$ 0.00\n");
+}
+ 
+/* ------ */
+/* 2. FAZER LOGIN */
+/* só deixa logar se não tiver conta logada e blqoueia a conta depois do max de tentativas erros. */
+/* ------ */
+void fazer_login() {
+    int numero, idx;
+    char senha_digitada[TAM_SENHA];
+    time_t agora;
+    
+    printf("\n" COR_CIANO "--- FAZER LOGIN ---" COR_RESET "\n");
+    
+    if (conta_logada != -1) {
+        printf(COR_AMARELO "Voce ja esta logado na conta de %s. Faca logout primeiro (opcao 8)." COR_RESET "\n",
+               nome[conta_logada]);
+        return;
+    }
+    
+    printf("Numero da conta: ");
+    scanf("%d", &numero);
+    
+    idx = buscar_conta(numero);
+    if (idx == -1) {
+        printf(COR_VERMELHO "Conta %d nao encontrada." COR_RESET "\n", numero);
+        return;
+    }
+    
+    agora = time(NULL);
+    if (bloqueio_login[idx] > agora) {
+        printf(COR_VERMELHO "Conta bloqueada por excesso de tentativas. Tente novamente em %ld segundos." COR_RESET "\n",
+               (long)(bloqueio_login[idx] - agora));
+        return;
+    }
+    
+    printf("Senha: ");
+    scanf(" %s", senha_digitada);
+    
+    if (strcmp(senha_digitada, senha[idx]) != 0) {
+        tentativas_login[idx]++;
+        
+        if (tentativas_login[idx] >= MAX_TENTATIVAS) {
+            bloqueio_login[idx] = time(NULL) + TEMPO_BLOQUEIO;
+            tentativas_login[idx] = 0;
+            printf(COR_VERMELHO "Senha incorreta. Numero maximo de tentativas excedido!" COR_RESET "\n");
+            printf(COR_VERMELHO "Conta bloqueada por %d segundos." COR_RESET "\n", TEMPO_BLOQUEIO);
+        } else {
+            printf(COR_VERMELHO "Senha incorreta. Tentativa %d de %d." COR_RESET "\n",
+                   tentativas_login[idx], MAX_TENTATIVAS);
+        }
+        return;
+    }
+    
+    tentativas_login[idx] = 0;
+    conta_logada = idx;
+    printf(COR_VERDE "Login realizado! Bem-vindo(a), %s." COR_RESET "\n", nome[idx]);
+}
+ 
+ 
+/* ------ */
+/* 3. DEPOSITAR */
+/* ------ */
+void depositar() {
+    float valor;
+    char descricao[TAM_HIST];
+    char mensagem[60];
+    
+    printf("\n" COR_CIANO "--- DEPOSITAR ---" COR_RESET "\n");
+    
+    if (conta_logada == -1) {
+        printf(COR_VERMELHO "Faca login primeiro (opcao 2)." COR_RESET "\n");
+        return;
+    }
+    
+    printf("Valor a depositar: R$ ");
+    scanf("%f", &valor);
+    
+    if (valor <= 0) {
+        printf(COR_VERMELHO "Valor invalido. Informe um valor positivo." COR_RESET "\n");
+        return;
+    }
+    
+    snprintf(mensagem, sizeof(mensagem), "Confirma o deposito de R$ %.2f?", valor);
+    if (!confirmar_operacao(mensagem)) {
+        printf(COR_AMARELO "Operacao cancelada." COR_RESET "\n");
+        return;
+    }
+    
+    saldo[conta_logada] += valor;
+    snprintf(descricao, TAM_HIST, "Deposito de R$ %.2f", valor);
+    registrar_historico(conta_logada, descricao);
+    
+    printf(COR_VERDE "Deposito realizado! Saldo atual: R$ %.2f" COR_RESET "\n", saldo[conta_logada]);
+}
+ 
+/* ------ */
+/* 4. SACAR */
+/* ------ */
+void sacar() {
+    float valor;
+    char descricao[TAM_HIST];
+    char mensagem[60];
+    
+    printf("\n" COR_CIANO "--- SACAR ---" COR_RESET "\n");
+    
+    if (conta_logada == -1) {
+        printf(COR_VERMELHO "Faca login primeiro (opcao 2)." COR_RESET "\n");
+        return;
+    }
+    
+    printf("Valor a sacar: R$ ");
+    scanf("%f", &valor);
+    
+    if (valor <= 0) {
+        printf(COR_VERMELHO "Valor invalido." COR_RESET "\n");
+        return;
+    }
+    if (valor > saldo[conta_logada]) {
+        printf(COR_VERMELHO "Saldo insuficiente. Saldo disponivel: R$ %.2f" COR_RESET "\n", saldo[conta_logada]);
+        return;
+    }
+    
+    snprintf(mensagem, sizeof(mensagem), "Confirma o saque de R$ %.2f?", valor);
+    if (!confirmar_operacao(mensagem)) {
+        printf(COR_AMARELO "Operacao cancelada." COR_RESET "\n");
+        return;
+    }
+    
+    saldo[conta_logada] -= valor;
+    snprintf(descricao, TAM_HIST, "Saque de R$ %.2f", valor);
+    registrar_historico(conta_logada, descricao);
+    
+    printf(COR_VERDE "Saque realizado! Saldo atual: R$ %.2f" COR_RESET "\n", saldo[conta_logada]);
+}
+ 
+/* ------ */
+/* 5. TRANSFERIR */
+/* A conta de origem e sempre a conta logada */
+/* ------ */
+void transferir() {
+    int num_destino, idx_dest;  
+    float valor;                
+    char descricao[TAM_HIST];   
+    char mensagem[140];         
+    
+    printf("\n" COR_CIANO "--- TRANSFERIR ---" COR_RESET "\n");
+    
+    // vê se tem conta logada já //
+    if (conta_logada == -1) {
+        printf(COR_VERMELHO "Faca login primeiro (opcao 2)." COR_RESET "\n");
+        return;
+    }
+    
+    
+    printf("Voce esta transferindo da conta de %s (conta %d)\n",
+           nome[conta_logada], num_conta[conta_logada]);
+    
+    
+    printf("Conta de destino: ");
+    scanf("%d", &num_destino);
+    
+    //  Procura a conta de destino pelo número dado //
+    idx_dest = buscar_conta(num_destino);
+    
+    // Vê se a conta existe //
+    if (idx_dest == -1) {
+        printf(COR_VERMELHO "Conta de destino %d nao encontrada." COR_RESET "\n", num_destino);
+        return;
+    }
+    
+    // Ver se a conta logada e a destino são a mesma conta //
+    if (conta_logada == idx_dest) {
+        printf(COR_VERMELHO "Origem e destino nao podem ser a mesma conta." COR_RESET "\n");
+        return;
+    }
+    
+    printf("Valor a transferir: R$ ");
+    scanf("%f", &valor);
+    
+    if (valor <= 0) {
+        printf(COR_VERMELHO "Valor invalido." COR_RESET "\n");
+        return;
+    }
+    
+    if (valor > saldo[conta_logada]) {
+        printf(COR_VERMELHO "Saldo insuficiente. Saldo disponivel: R$ %.2f" COR_RESET "\n", saldo[conta_logada]);
+        return;
+    }
+    
+    snprintf(mensagem, sizeof(mensagem), "Confirma a transferencia de R$ %.2f para %s (conta %d)?",
+             valor, nome[idx_dest], num_destino);
+    if (!confirmar_operacao(mensagem)) {
+        printf(COR_AMARELO "Operacao cancelada." COR_RESET "\n");
+        return;
+    }
+    
+    // tira da conta logada e coloca na conta destino //
+    saldo[conta_logada] -= valor;
+    saldo[idx_dest] += valor;
+    
+    // transferência enviada //
+    snprintf(descricao, TAM_HIST, "Transferencia enviada de R$ %.2f para conta %d (%s)",
+             valor, num_conta[idx_dest], nome[idx_dest]);
+    registrar_historico(conta_logada, descricao);
+    
+    // transferência recebida //
+    snprintf(descricao, TAM_HIST, "Transferencia recebida de R$ %.2f da conta %d (%s)",
+             valor, num_conta[conta_logada], nome[conta_logada]);
+    registrar_historico(idx_dest, descricao);
+    
+    // Resultados com saldos atualizados //
+    printf(COR_VERDE "Transferencia realizada!" COR_RESET "\n");
+    printf(" De : %s (conta %d) -> Saldo: R$ %.2f\n",
+           nome[conta_logada], num_conta[conta_logada], saldo[conta_logada]);
+    printf(" Para: %s (conta %d) -> Saldo: R$ %.2f\n",
+           nome[idx_dest], num_conta[idx_dest], saldo[idx_dest]);
+}
+ 
+/* ------ */
+/* 6. CONSULTAR SALDO */
+/* Mostra o saldo da conta atualmente logada */
+/* ------ */
+void consultar_saldo() {
+    printf("\n" COR_CIANO "--- CONSULTAR SALDO ---" COR_RESET "\n");
+    
+    if (conta_logada == -1) {
+        printf(COR_VERMELHO "Faca login primeiro (opcao 2)." COR_RESET "\n");
+        return;
+    }
+    
+    printf("\nTitular: %s\n", nome[conta_logada]);
+    printf("Conta : %d\n", num_conta[conta_logada]);
+    printf(COR_VERDE "Saldo : R$ %.2f" COR_RESET "\n", saldo[conta_logada]);
+}
+ 
+/* ------ */
+/* 7. EXTRATO (mostra os dados e o historico da conta logada) */
+/* ------ */
+void extrato() {
+    int i;
+    
+    printf("\n" COR_CIANO "--- EXTRATO ---" COR_RESET "\n");
+    
+    if (conta_logada == -1) {
+        printf(COR_VERMELHO "Faca login primeiro (opcao 2)." COR_RESET "\n");
+        return;
+    }
+    
+    printf("Titular: %s\n", nome[conta_logada]);
+    printf("Conta : %d\n", num_conta[conta_logada]);
+    printf(COR_VERDE "Saldo : R$ %.2f" COR_RESET "\n", saldo[conta_logada]);
+    
+    printf("\n" COR_NEGRITO "Ultimas transacoes:" COR_RESET "\n");
+    if (qtd_historico[conta_logada] == 0) {
+        printf(COR_AMARELO "Nenhuma transacao registrada ainda." COR_RESET "\n");
+        return;
+    }
+    
+    /* mostra da mais recente pra mais antiga */
+    for (i = qtd_historico[conta_logada] - 1; i >= 0; i--) {
+        printf(" - %s\n", historico[conta_logada][i]);
+    }
+}
+
+/* ------ */
+/* 8. FAZER LOGOUT */
+/* Sai da conta logada, mas mantem o sistema aberto */
+/* ------ */
+void fazer_logout() {
+    printf("\n" COR_CIANO "--- FAZER LOGOUT ---" COR_RESET "\n");
+    
+    if (conta_logada == -1) {
+        printf(COR_AMARELO "Nenhuma conta logada." COR_RESET "\n");
+        return;
+    }
+    
+    printf(COR_VERDE "Logout realizado. Ate logo, %s!" COR_RESET "\n", nome[conta_logada]);
+    conta_logada = -1;
+    
+}
+ 
+/* ------ */
+/* MAIN */
+/* ------ */
+int main() {
+    int opcao;
+    
+    do {
+        opcao = menu();
+        
+        switch (opcao) {
+            case 1: criar_conta(); break;
+            case 2: fazer_login(); break;
+            case 3: depositar(); break;
+            case 4: sacar(); break;
+            case 5: transferir(); break;
+            case 6: consultar_saldo(); break;
+            case 7: extrato(); break;
+            case 8: fazer_logout(); break;
+            case 0: printf("\n" COR_VERDE "Encerrando o sistema. Ate logo!" COR_RESET "\n"); break;
+            default:
+                printf("\n" COR_VERMELHO "Opcao invalida. Tente novamente." COR_RESET "\n");
+        }
+        
+        if (opcao != 0) {
+            printf("\nPressione ENTER para continuar...");
+            getchar();
+            getchar();
+        }
+        
+    } while (opcao != 0);
+    
+    return 0;
+}
